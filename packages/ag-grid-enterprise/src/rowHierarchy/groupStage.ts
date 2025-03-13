@@ -2,15 +2,16 @@ import type {
     ClientSideRowModelStage,
     GridOptions,
     GroupingApproach,
+    IRowGroupStage,
     IRowGroupingStrategy,
-    IRowNodeStage,
+    MoveRowsParams,
     NamedBean,
     RowGroupingRowNode,
     StageExecuteParams,
 } from 'ag-grid-community';
 import { BeanStub, _getGroupingApproach } from 'ag-grid-community';
 
-export class GroupStage<TData> extends BeanStub implements NamedBean, IRowNodeStage {
+export class GroupStage<TData> extends BeanStub implements NamedBean, IRowGroupStage<TData> {
     beanName = 'groupStage' as const;
 
     public refreshProps: Set<keyof GridOptions<any>> = new Set([
@@ -68,6 +69,11 @@ export class GroupStage<TData> extends BeanStub implements NamedBean, IRowNodeSt
 
         strategy?.execute(params);
         return !!strategy;
+    }
+
+    /** Executed for drag and drop */
+    public moveRows(params: MoveRowsParams<TData>): boolean | undefined {
+        return this.strategy?.moveRows?.(params);
     }
 }
 

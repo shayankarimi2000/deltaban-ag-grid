@@ -27,12 +27,26 @@ export interface StageExecuteParams<TData = any> {
     afterColumnsChanged?: boolean;
 }
 
+export interface MoveRowsParams<TData = any> {
+    rootNode: RowGroupingRowNode<TData>;
+    rowNodes: RowGroupingRowNode<TData>[];
+    target: RowGroupingRowNode<TData>;
+    increment: number;
+    moveInside: boolean;
+}
+
 export interface IRowGroupingStrategy<TData = any> extends Bean {
     execute(params: StageExecuteParams<TData>): void;
+    moveRows?(params: MoveRowsParams<TData>): boolean;
 }
 
 export interface IRowNodeStage<TResult = any, TData = any> {
     step: ClientSideRowModelStage;
     refreshProps: Set<keyof GridOptions>;
     execute(params: StageExecuteParams<TData>): TResult;
+}
+
+export interface IRowGroupStage<TData = any> extends IRowNodeStage<void, TData> {
+    /** Executed for drag and drop */
+    moveRows(params: MoveRowsParams<TData>): boolean | undefined;
 }

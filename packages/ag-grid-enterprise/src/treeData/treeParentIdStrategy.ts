@@ -2,6 +2,8 @@ import type {
     IRowGroupingStrategy,
     IRowModel,
     IsGroupOpenByDefaultParams,
+    MoveRowsParams,
+    RowGroupingRowNode,
     RowNode,
     StageExecuteParams,
     WithoutGridCommon,
@@ -28,7 +30,7 @@ export class TreeParentIdStrategy<TData = any> extends BeanStub implements IRowG
         this.oldGroupDisplayColIds = null;
     }
 
-    public execute(params: StageExecuteParams<TData>) {
+    public execute(params: StageExecuteParams<TData>, reloadParents = true) {
         // Instead of trying to optimize for immutable row update and transactions when a small portion of the tree changes
         // the decision here was to implement with two linear loops, first all nodes and then a tree traversal,
         // reducing allocations to the minimum possible.
@@ -43,7 +45,7 @@ export class TreeParentIdStrategy<TData = any> extends BeanStub implements IRowG
 
         const rootNode: TreeRow<TData> = params.rowNode;
 
-        let fullReload = !params.changedRowNodes;
+        let fullReload = reloadParents && !params.changedRowNodes;
         let rootChildrenAfterGroup = rootNode.childrenAfterGroup;
         if (!rootChildrenAfterGroup || rootChildrenAfterGroup === rootNode.allLeafChildren) {
             fullReload = true;
@@ -102,10 +104,11 @@ export class TreeParentIdStrategy<TData = any> extends BeanStub implements IRowG
                 if (processNode(child, level)) {
                     allLeafChildrenChanged = true;
                 }
-                allLeafChildrenLen += child.allLeafChildren!.length;
+                allLeafChildrenLen += child.allLeafChildren!.length || 1;
             }
 
             const allLeafChildren = (row.allLeafChildren ??= _EmptyArray);
+
             if (allLeafChildrenChanged || allLeafChildren.length !== allLeafChildrenLen) {
                 allLeafChildrenChanged = updateAllLeafChildren(row, allLeafChildren, allLeafChildrenLen);
             }
@@ -158,6 +161,73 @@ export class TreeParentIdStrategy<TData = any> extends BeanStub implements IRowG
             // We have unprocessed nodes, this means we have at least one cycle to fix
             handleCycles(rootNode, processNode);
         }
+    }
+
+    /** Used for drag and drop */
+    public moveRows({ rootNode, rowNodes, target, moveInside, increment }: MoveRowsParams<TData>): boolean {
+        moveInside = true;
+
+        const allLeafChildren = rootNode.allLeafChildren!;
+        const allLeafChildrenLen = allLeafChildren.length;
+        const newParent = moveInside ? target : target.parent ?? rootNode;
+
+        let indexOfFirstNodeToMove = allLeafChildrenLen;
+        const nodesToMove = new Set<RowGroupingRowNode<TData>>();
+        for (const row of rowNodes) {
+            if (row === target) {
+                return false; // Cannot move a node into itself
+            }
+            if (!wouldFormCycle(row, newParent)) {
+                row.treeNodeFlags |= FLAG_CHANGED;
+                newParent.treeNodeFlags |= FLAG_CHILDREN_CHANGED;
+                row.parent = newParent;
+                nodesToMove.add(row);
+                const rowIndex = row.sourceRowIndex;
+                if (rowIndex < indexOfFirstNodeToMove) {
+                    indexOfFirstNodeToMove = rowIndex;
+                }
+            }
+        }
+
+        if (nodesToMove.size === 0) {
+            return false; // Nothing to move
+        }
+
+        let splitIndex = target.sourceRowIndex + increment;
+        if (indexOfFirstNodeToMove < splitIndex) {
+            ++splitIndex;
+        }
+        splitIndex = Math.max(0, Math.min(allLeafChildrenLen, splitIndex));
+
+        // First partition, filter from left to right
+        let leftIdx = 0;
+        for (let i = 0; i < splitIndex; ++i) {
+            const row = allLeafChildren[i];
+            if (!nodesToMove.has(row)) {
+                row.sourceRowIndex = leftIdx;
+                allLeafChildren[leftIdx++] = row;
+            }
+        }
+
+        // Third partition, filter from right to left
+        let rightIdx = allLeafChildrenLen - 1;
+        for (let i = rightIdx; i >= splitIndex; --i) {
+            const row = allLeafChildren[i];
+            if (!nodesToMove.has(row)) {
+                row.sourceRowIndex = rightIdx;
+                allLeafChildren[rightIdx--] = row;
+            }
+        }
+
+        // Second partition, the nodes to move overwrite the middle between the other two partitions
+        for (const node of nodesToMove) {
+            node.sourceRowIndex = leftIdx;
+            allLeafChildren[leftIdx++] = node;
+        }
+
+        this.execute({ rowNode: rootNode, rowNodesOrderChanged: true }, false);
+
+        return true;
     }
 
     private updateGroupDisplayColsIds(): boolean {
@@ -260,12 +330,20 @@ const updateAllLeafChildren = <TData>(
     }
     let writeIdx = 0;
     for (const child of row.childrenAfterGroup!) {
-        for (const leaf of child.allLeafChildren!) {
-            if (changed || allLeafChildren[writeIdx] !== leaf) {
-                allLeafChildren[writeIdx] = leaf;
-                changed = true;
+        const childAllLeafChildren = child.allLeafChildren!;
+        if (childAllLeafChildren.length === 0) {
+            if (changed || allLeafChildren[writeIdx] !== child) {
+                allLeafChildren[writeIdx++] = child;
             }
-            ++writeIdx;
+            changed = true;
+        } else {
+            for (const leaf of childAllLeafChildren) {
+                if (changed || allLeafChildren[writeIdx] !== leaf) {
+                    allLeafChildren[writeIdx] = leaf;
+                    changed = true;
+                }
+                ++writeIdx;
+            }
         }
     }
     return changed;
@@ -341,4 +419,18 @@ const preprocess = <TData>(
 
         newParent.treeNodeFlags = parentFlags;
     }
+};
+
+const wouldFormCycle = <TData>(
+    row: RowGroupingRowNode<TData>,
+    newParent: RowGroupingRowNode<TData> | null
+): boolean => {
+    let parent = newParent;
+    while (parent) {
+        if (parent === row) {
+            return true;
+        }
+        parent = parent.parent;
+    }
+    return false;
 };

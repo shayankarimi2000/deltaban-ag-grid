@@ -21,7 +21,7 @@ import type {
     RefreshModelParams,
 } from '../interfaces/iClientSideRowModel';
 import type { RowBounds, RowModelType } from '../interfaces/iRowModel';
-import type { IRowNodeStage } from '../interfaces/iRowNodeStage';
+import type { IRowGroupStage, IRowNodeStage } from '../interfaces/iRowNodeStage';
 import type { RowDataTransaction } from '../interfaces/rowDataTransaction';
 import type { RowNodeTransaction } from '../interfaces/rowNodeTransaction';
 import { _EmptyArray, _last, _removeFromArray } from '../utils/array';
@@ -58,7 +58,7 @@ export class ClientSideRowModel extends BeanStub implements IClientSideRowModel,
     private flattenStage?: IRowNodeStage<RowNode[]>;
 
     // enterprise stages
-    private groupStage?: IRowNodeStage;
+    private groupStage?: IRowGroupStage;
     private aggStage?: IRowNodeStage;
     private pivotStage?: IRowNodeStage;
     private filterAggStage?: IRowNodeStage;
@@ -433,35 +433,60 @@ export class ClientSideRowModel extends BeanStub implements IClientSideRowModel,
 
     // returns false if row was moved, otherwise true
     public ensureRowsAtPixel(rowNodes: RowNode[], pixel: number, increment: number = 0): boolean {
+        const rootNode = this.rootNode;
+        const allLeafChildren = rootNode?.allLeafChildren;
+        if (!allLeafChildren) {
+            return false; // Destroyed
+        }
+
         const indexAtPixelNow = this.getRowIndexAtPixel(pixel);
         const rowNodeAtPixelNow = this.getRow(indexAtPixelNow);
         const animate = !this.gos.get('suppressAnimationFrame');
 
-        if (rowNodeAtPixelNow === rowNodes[0]) {
-            return false;
+        const moveResult = this.groupStage?.moveRows({
+            rootNode,
+            rowNodes,
+            target: rowNodeAtPixelNow,
+            increment,
+            moveInside: false, // TODO: determine if we should allow moving inside using vertical areas
+        });
+
+        if (moveResult === undefined) {
+            if (rowNodeAtPixelNow === rowNodes[0]) {
+                return false;
+            }
+
+            // TODO: this implementation is currently quite inefficient and it could be optimized to run in O(n) in a single pass
+
+            rowNodes.forEach((rowNode) => {
+                _removeFromArray(allLeafChildren, rowNode);
+            });
+
+            const delta = Math.max(indexAtPixelNow + increment, 0);
+            rowNodes.forEach((rowNode, idx) => {
+                allLeafChildren.splice(delta + idx, 0, rowNode);
+            });
+
+            rowNodes.forEach((rowNode: ClientSideRowModelRowNode, index) => {
+                rowNode.sourceRowIndex = index; // Update all the sourceRowIndex to reflect the new positions
+            });
+
+            this.refreshModel({
+                step: 'group',
+                keepRenderedRows: true,
+                animate,
+                rowNodesOrderChanged: true, // We assume the order changed and we don't need to check if it really did
+            });
+
+            return true;
         }
 
-        const allLeafChildren = this.rootNode?.allLeafChildren;
-        if (!allLeafChildren) {
+        if (!moveResult) {
             return false;
         }
-
-        // TODO: this implementation is currently quite inefficient and it could be optimized to run in O(n) in a single pass
-
-        rowNodes.forEach((rowNode) => {
-            _removeFromArray(allLeafChildren, rowNode);
-        });
-
-        rowNodes.forEach((rowNode, idx) => {
-            allLeafChildren.splice(Math.max(indexAtPixelNow + increment, 0) + idx, 0, rowNode);
-        });
-
-        rowNodes.forEach((rowNode: ClientSideRowModelRowNode, index) => {
-            rowNode.sourceRowIndex = index; // Update all the sourceRowIndex to reflect the new positions
-        });
 
         this.refreshModel({
-            step: 'group',
+            step: 'sort',
             keepRenderedRows: true,
             animate,
             rowNodesOrderChanged: true, // We assume the order changed and we don't need to check if it really did

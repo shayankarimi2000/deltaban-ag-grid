@@ -914,6 +914,8 @@ export {
 } from './interfaces/iContextMenu';
 export {
     IRowNodeStage,
+    IRowGroupStage,
+    MoveRowsParams,
     IRowGroupingStrategy,
     RowGroupingRowNode,
     StageExecuteParams,
