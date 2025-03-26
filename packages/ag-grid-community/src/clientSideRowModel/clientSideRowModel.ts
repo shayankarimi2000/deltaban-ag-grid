@@ -246,7 +246,7 @@ export class ClientSideRowModel extends BeanStub implements IClientSideRowModel,
 
             for (let rowIndex = firstRow; rowIndex <= lastRow; rowIndex++) {
                 const rowNode = this.getRow(rowIndex);
-                if (rowNode.rowHeightEstimated) {
+                if (rowNode?.rowHeightEstimated) {
                     const rowHeight = _getRowHeightForNode(this.beans, rowNode);
                     rowNode.setRowHeight(rowHeight.height);
                     atLeastOneChange = true;
@@ -431,66 +431,67 @@ export class ClientSideRowModel extends BeanStub implements IClientSideRowModel,
         recurse(this.rootNode);
     }
 
-    // returns false if row was moved, otherwise true
-    public ensureRowsAtPixel(rowNodes: RowNode[], pixel: number, increment: number = 0): boolean {
+    /** returns true if rows were moved, otherwise true - used for drag and drop within the same grid */
+    public moveRows(rowNodes: RowNode[], target: RowNode, above: boolean, below: boolean): boolean {
         const rootNode = this.rootNode;
-        const allLeafChildren = rootNode?.allLeafChildren;
-        if (!allLeafChildren) {
-            return false; // Destroyed
+        if (!rootNode || !rowNodes.length) {
+            return false;
         }
 
-        const indexAtPixelNow = this.getRowIndexAtPixel(pixel);
-        const rowNodeAtPixelNow = this.getRow(indexAtPixelNow);
-        const animate = !this.gos.get('suppressAnimationFrame');
+        const moveResult = this.groupStage?.moveRows(rootNode, rowNodes, target, above, below);
 
-        const moveResult = this.groupStage?.moveRows({
-            rootNode,
-            rowNodes,
-            target: rowNodeAtPixelNow,
-            increment,
-            moveInside: false, // TODO: determine if we should allow moving inside using vertical areas
-        });
-
-        if (moveResult === undefined) {
-            if (rowNodeAtPixelNow === rowNodes[0]) {
+        let step: ClientSideRowModelStage;
+        if (moveResult) {
+            step = 'filter';
+        } else if (moveResult === undefined) {
+            if (!this.moveRowsFlat(rootNode, rowNodes, target, below)) {
                 return false;
             }
-
-            // TODO: this implementation is currently quite inefficient and it could be optimized to run in O(n) in a single pass
-
-            rowNodes.forEach((rowNode) => {
-                _removeFromArray(allLeafChildren, rowNode);
-            });
-
-            const delta = Math.max(indexAtPixelNow + increment, 0);
-            rowNodes.forEach((rowNode, idx) => {
-                allLeafChildren.splice(delta + idx, 0, rowNode);
-            });
-
-            rowNodes.forEach((rowNode: ClientSideRowModelRowNode, index) => {
-                rowNode.sourceRowIndex = index; // Update all the sourceRowIndex to reflect the new positions
-            });
-
-            this.refreshModel({
-                step: 'group',
-                keepRenderedRows: true,
-                animate,
-                rowNodesOrderChanged: true, // We assume the order changed and we don't need to check if it really did
-            });
-
-            return true;
-        }
-
-        if (!moveResult) {
+            step = 'group';
+        } else {
             return false;
         }
 
         this.refreshModel({
-            step: 'sort',
+            step,
             keepRenderedRows: true,
-            animate,
-            rowNodesOrderChanged: true, // We assume the order changed and we don't need to check if it really did
+            animate: !this.gos.get('suppressAnimationFrame'),
+            rowNodesOrderChanged: true,
         });
+
+        return true;
+    }
+
+    /** Called by `moveRows` for drag and drop on a flat list of rows. */
+    private moveRowsFlat(rootNode: RowNode, rowNodes: RowNode[], target: RowNode, below: boolean): boolean {
+        // TODO: this implementation is currently quite inefficient and it could be optimized to run in O(n) in a single pass
+
+        const rowNodesLen = rowNodes.length;
+        const targetRowTop = target.rowTop!;
+        let increment = below ? 1 : 0;
+        for (let i = 0, len = rowNodesLen; i < len; ++i) {
+            const rowNode = rowNodes[i];
+            if (rowNode === target) {
+                return false;
+            }
+            if (rowNode.rowTop! <= targetRowTop) {
+                --increment;
+            }
+        }
+
+        const allLeafChildren: ClientSideRowModelRowNode[] = rootNode.allLeafChildren!;
+        for (let i = 0; i < rowNodesLen; ++i) {
+            _removeFromArray(allLeafChildren, rowNodes[i]);
+        }
+
+        const delta = Math.max(target.sourceRowIndex + increment, 0);
+        for (let i = 0; i < rowNodesLen; ++i) {
+            allLeafChildren.splice(delta + i, 0, rowNodes[i]);
+        }
+
+        for (let i = 0, len = allLeafChildren.length; i < len; ++i) {
+            allLeafChildren[i].sourceRowIndex = i;
+        }
 
         return true;
     }
@@ -654,6 +655,9 @@ export class ClientSideRowModel extends BeanStub implements IClientSideRowModel,
         }
 
         let node = this.getRow(displayedIndex);
+        if (!node) {
+            return displayedIndex;
+        }
 
         if (node.footer) {
             node = node.sibling;
@@ -894,8 +898,9 @@ export class ClientSideRowModel extends BeanStub implements IClientSideRowModel,
         return this.rootNode?.childrenAfterGroup ?? null;
     }
 
-    public getRow(index: number): RowNode {
-        return this.rowsToDisplay[index];
+    public getRow(index: number): RowNode | undefined {
+        const rowsToDisplay = this.rowsToDisplay;
+        return index >= 0 && index < rowsToDisplay.length ? rowsToDisplay[index] : undefined;
     }
 
     public isRowPresent(rowNode: RowNode): boolean {

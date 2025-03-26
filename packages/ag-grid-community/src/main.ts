@@ -914,7 +914,6 @@ export {
 export {
     IRowNodeStage,
     IRowGroupStage,
-    MoveRowsParams,
     IRowGroupingStrategy,
     RowGroupingRowNode,
     StageExecuteParams,

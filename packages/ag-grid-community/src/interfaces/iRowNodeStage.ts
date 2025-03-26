@@ -27,17 +27,15 @@ export interface StageExecuteParams<TData = any> {
     afterColumnsChanged?: boolean;
 }
 
-export interface MoveRowsParams<TData = any> {
-    rootNode: RowGroupingRowNode<TData>;
-    rowNodes: RowGroupingRowNode<TData>[];
-    target: RowGroupingRowNode<TData>;
-    increment: number;
-    moveInside: boolean;
-}
-
 export interface IRowGroupingStrategy<TData = any> extends Bean {
     execute(params: StageExecuteParams<TData>): void;
-    moveRows?(params: MoveRowsParams<TData>): boolean;
+    moveRows?(
+        rootNode: RowGroupingRowNode,
+        rowNodes: RowGroupingRowNode[],
+        target: RowGroupingRowNode,
+        above: boolean,
+        below: boolean
+    ): boolean;
 }
 
 export interface IRowNodeStage<TResult = any, TData = any> {
@@ -48,5 +46,11 @@ export interface IRowNodeStage<TResult = any, TData = any> {
 
 export interface IRowGroupStage<TData = any> extends IRowNodeStage<void, TData> {
     /** Executed for drag and drop */
-    moveRows(params: MoveRowsParams<TData>): boolean | undefined;
+    moveRows(
+        rootNode: RowNode,
+        rowNodes: RowNode[],
+        target: RowNode,
+        above: boolean,
+        below: boolean
+    ): boolean | undefined;
 }

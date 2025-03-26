@@ -4,9 +4,9 @@ import type {
     GroupingApproach,
     IRowGroupStage,
     IRowGroupingStrategy,
-    MoveRowsParams,
     NamedBean,
     RowGroupingRowNode,
+    RowNode,
     StageExecuteParams,
 } from 'ag-grid-community';
 import { BeanStub, _getGroupingApproach } from 'ag-grid-community';
@@ -72,8 +72,14 @@ export class GroupStage<TData> extends BeanStub implements NamedBean, IRowGroupS
     }
 
     /** Executed for drag and drop */
-    public moveRows(params: MoveRowsParams<TData>): boolean | undefined {
-        return this.strategy?.moveRows?.(params);
+    public moveRows(
+        rootNode: RowNode,
+        rowNodes: RowNode[],
+        target: RowNode,
+        above: boolean,
+        below: boolean
+    ): boolean | undefined {
+        return this.strategy?.moveRows?.(rootNode, rowNodes, target, above, below);
     }
 }
 

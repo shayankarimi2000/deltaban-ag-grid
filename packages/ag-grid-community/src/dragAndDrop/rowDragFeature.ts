@@ -223,20 +223,11 @@ export class RowDragFeature extends BeanStub implements DropTarget {
 
     private moveRowAndClearHighlight(draggingEvent: DraggingEvent): void {
         const clientSideRowModel = this.clientSideRowModel;
-        const lastHighlightedRowNode = clientSideRowModel.getLastHighlightedRowNode();
-        const isBelow = lastHighlightedRowNode && lastHighlightedRowNode.highlighted === 'Below';
         const pixel = _getNormalisedMousePosition(this.beans, draggingEvent).y;
         const rowNodes = draggingEvent.dragItem.rowNodes as RowNode[];
 
-        let increment = isBelow ? 1 : 0;
-
         if (this.isFromThisGrid(draggingEvent)) {
-            rowNodes!.forEach((rowNode) => {
-                if (rowNode.rowTop! < pixel) {
-                    increment -= 1;
-                }
-            });
-            this.moveRows(rowNodes!, pixel, increment);
+            this.moveRows(rowNodes, pixel);
         } else {
             const getRowIdFunc = _getRowIdCallback(this.gos);
 
@@ -247,7 +238,7 @@ export class RowDragFeature extends BeanStub implements DropTarget {
             }
 
             clientSideRowModel.updateRowData({
-                add: rowNodes!
+                add: rowNodes
                     .filter(
                         (node) =>
                             !clientSideRowModel.getRowNode(
@@ -266,13 +257,22 @@ export class RowDragFeature extends BeanStub implements DropTarget {
         this.clientSideRowModel.highlightRowAtPixel(null);
     }
 
-    private moveRows(rowNodes: RowNode[], pixel: number, increment: number = 0): void {
+    private moveRows(rowNodes: RowNode[], pixel: number): void {
+        const clientSideRowModel = this.clientSideRowModel;
+
+        const indexAtPixelNow = clientSideRowModel.getRowIndexAtPixel(pixel);
+        const target = clientSideRowModel.getRow(indexAtPixelNow);
+        if (!target) {
+            return;
+        }
+
         const focusSvc = this.beans.focusSvc;
         // Get the focussed cell so we can ensure it remains focussed after the move
         const cellPosition = focusSvc.getFocusedCell();
         const cellCtrl = cellPosition && _getCellByPosition(this.beans, cellPosition);
 
-        const rowWasMoved = this.clientSideRowModel.ensureRowsAtPixel(rowNodes, pixel, increment);
+        const { target: newTarget, above, below } = this.getDropPos(target, pixel);
+        const rowWasMoved = clientSideRowModel.moveRows(rowNodes, newTarget, above, below);
         if (rowWasMoved) {
             if (cellCtrl) {
                 cellCtrl.focusCell();
@@ -280,6 +280,56 @@ export class RowDragFeature extends BeanStub implements DropTarget {
                 focusSvc.clearFocusedCell();
             }
         }
+    }
+
+    /**
+     * For non-treeData, this we just check the last highlighted row node to determine the drop position below (1) or not (0)
+     *
+     * For treeData, target areas for dropping rows will be based on the Y axis of the mouse.
+     * - 0% - 25% height: Insert rows above (-1).
+     * - 25% - 75% height: Add to group / create group (0).
+     * - 75% - 100% height - Insert rows below (1).
+     */
+    private getDropPos(
+        target: RowNode,
+        y: number
+    ): {
+        target: RowNode;
+        below: boolean;
+        above: boolean;
+    } {
+        let above: boolean;
+        let below: boolean;
+        if (this.gos.get('treeData')) {
+            const SECTION_THRESHOLD = 0.25;
+            const percentage = (y - target.rowTop!) / target.rowHeight!;
+
+            above = percentage < SECTION_THRESHOLD;
+            below = !above && percentage > 1 - SECTION_THRESHOLD;
+
+            if (below) {
+                const next = this.clientSideRowModel.getRow(target.rowIndex! + 1);
+                if (next && next.level > target.level && (target.childrenAfterSort?.length || 0) > 1) {
+                    below = false;
+                    above = true;
+                    target = next;
+                } else if (percentage > 1 && !next) {
+                    // Trying to drag after all the rows, we want to find the topmost parent and insert after that.
+                    while (true) {
+                        const parent = target.parent;
+                        if (!parent || parent.level < 0) {
+                            break;
+                        }
+                        target = parent;
+                    }
+                }
+            }
+        } else {
+            above = this.clientSideRowModel.getHighlightPosition(y, target) === 'Above';
+            below = !above;
+        }
+
+        return { target, above, below };
     }
 
     public addRowDropZone(params: RowDropZoneParams & { fromGrid?: boolean }): void {

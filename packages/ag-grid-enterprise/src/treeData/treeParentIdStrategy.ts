@@ -2,7 +2,6 @@ import type {
     IRowGroupingStrategy,
     IRowModel,
     IsGroupOpenByDefaultParams,
-    MoveRowsParams,
     RowGroupingRowNode,
     RowNode,
     StageExecuteParams,
@@ -166,65 +165,65 @@ export class TreeParentIdStrategy<TData = any> extends BeanStub implements IRowG
     }
 
     /** Used for drag and drop */
-    public moveRows({ rootNode, rowNodes, target, moveInside, increment }: MoveRowsParams<TData>): boolean {
-        moveInside = true;
-
+    public moveRows(
+        rootNode: RowGroupingRowNode,
+        rowNodes: RowGroupingRowNode[],
+        target: RowGroupingRowNode,
+        above: boolean,
+        below: boolean
+    ): boolean {
         const allLeafChildren = rootNode.allLeafChildren!;
-        const allLeafChildrenLen = allLeafChildren.length;
-        const newParent = moveInside ? target : target.parent ?? rootNode;
+        const newParent = !above && !below ? target : target.parent ?? rootNode;
 
-        let indexOfFirstNodeToMove = allLeafChildrenLen;
-        const nodesToMove = new Set<RowGroupingRowNode<TData>>();
-        for (const row of rowNodes) {
-            if (row === target) {
-                return false; // Cannot move a node into itself
+        const rowNodesSet = new Set<RowGroupingRowNode<TData>>();
+        for (const rowNode of rowNodes) {
+            if (rowNode === target) {
+                return false; // Can't move to itself
             }
-            if (!wouldFormCycle(row, newParent)) {
-                row.treeNodeFlags |= FLAG_CHANGED;
-                newParent.treeNodeFlags |= FLAG_CHILDREN_CHANGED;
-                row.parent = newParent;
-                nodesToMove.add(row);
-                const rowIndex = row.sourceRowIndex;
-                if (rowIndex < indexOfFirstNodeToMove) {
-                    indexOfFirstNodeToMove = rowIndex;
-                }
+            if (!wouldFormCycle(rowNode, newParent)) {
+                rowNodesSet.add(rowNode);
             }
         }
 
-        if (nodesToMove.size === 0) {
+        if (rowNodesSet.size === 0) {
             return false; // Nothing to move
         }
 
-        let splitIndex = target.sourceRowIndex + increment;
-        if (indexOfFirstNodeToMove < splitIndex) {
-            ++splitIndex;
+        for (const rowNode of rowNodesSet) {
+            if (rowNode.parent !== newParent) {
+                rowNode.parent = newParent;
+                rowNode.treeNodeFlags |= FLAG_CHANGED;
+            }
+            newParent.treeNodeFlags |= FLAG_CHILDREN_CHANGED;
         }
-        splitIndex = Math.max(0, Math.min(allLeafChildrenLen, splitIndex));
 
-        // First partition, filter from left to right
+        const allLeafChildrenLen = allLeafChildren.length;
+        const splitIndex = Math.max(0, Math.min(allLeafChildrenLen, target.sourceRowIndex + (below ? 1 : 0)));
+
+        // First partition. Filter from left to right, so the middle can be overwritten
         let leftIdx = 0;
         for (let i = 0; i < splitIndex; ++i) {
             const row = allLeafChildren[i];
-            if (!nodesToMove.has(row)) {
+            if (!rowNodesSet.has(row)) {
                 row.sourceRowIndex = leftIdx;
                 allLeafChildren[leftIdx++] = row;
             }
         }
 
-        // Third partition, filter from right to left
+        // Third partition. Filter from right to left, so the middle can be overwritten
         let rightIdx = allLeafChildrenLen - 1;
         for (let i = rightIdx; i >= splitIndex; --i) {
             const row = allLeafChildren[i];
-            if (!nodesToMove.has(row)) {
+            if (!rowNodesSet.has(row)) {
                 row.sourceRowIndex = rightIdx;
                 allLeafChildren[rightIdx--] = row;
             }
         }
 
-        // Second partition, the nodes to move overwrite the middle between the other two partitions
-        for (const node of nodesToMove) {
-            node.sourceRowIndex = leftIdx;
-            allLeafChildren[leftIdx++] = node;
+        // Second partition. Overwrites the middle between the other two filtered partitions
+        for (const row of rowNodesSet) {
+            row.sourceRowIndex = leftIdx;
+            allLeafChildren[leftIdx++] = row;
         }
 
         this.execute({ rowNode: rootNode, rowNodesOrderChanged: true }, false);
