@@ -291,10 +291,9 @@ export function _anchorElementToMouseMoveEvent(
 }
 
 export function _isNothingFocused(beans: BeanCollection): boolean {
-    const eDocument = _getDocument(beans);
     const activeEl = _getActiveDomElement(beans);
 
-    return activeEl === null || activeEl === eDocument.body;
+    return activeEl === null || activeEl === _getDocument(beans).body;
 }
 
 export function _isAnimateRows(gos: GridOptionsService) {
@@ -335,7 +334,7 @@ export function _getGroupAggFiltering(
     return undefined;
 }
 
-export function _getGrandTotalRow(gos: GridOptionsService): 'top' | 'bottom' | undefined {
+export function _getGrandTotalRow(gos: GridOptionsService): GridOptions['grandTotalRow'] {
     return gos.get('grandTotalRow');
 }
 

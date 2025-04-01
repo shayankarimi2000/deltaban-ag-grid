@@ -99,9 +99,12 @@ export class GroupCellRendererCtrl extends BeanStub implements IGroupCellRendere
             // if this isn't the column we are showing the group for, then we don't show anything
             return;
         }
-        this.setupCheckbox();
         this.addFooterValue();
         this.setupIndent();
+
+        if (!isGrandTotal) {
+            this.comp.addOrRemoveCssClass('ag-row-group-leaf-indent', true);
+        }
     }
 
     private initFullWidthCell(): void {
@@ -182,7 +185,7 @@ export class GroupCellRendererCtrl extends BeanStub implements IGroupCellRendere
         // if no formatted value and node key is '', then we replace this group with (Blanks)
         // this does not propagate down for [showOpenedGroup]
         const formattedValue = this.getFormattedValue() ?? _getGroupValue(column, node, displayedNode, beans);
-        const innerCompDetails = this.getInnerCompDetails();
+        const innerCompDetails = this.getInnerCompDetails(formattedValue);
         this.comp.setInnerRenderer(innerCompDetails, formattedValue ?? value ?? null);
     }
 
@@ -192,11 +195,16 @@ export class GroupCellRendererCtrl extends BeanStub implements IGroupCellRendere
      */
     private getFormattedValue(): any {
         const { valueSvc } = this.beans;
-        const { value, valueFormatted, colDef } = this.params;
+        const { value, valueFormatted, column } = this.params;
         const { rowGroupColumn } = this.displayedNode;
 
-        if (!rowGroupColumn || colDef?.valueFormatter) {
+        // full width rows and non-grouped cols use formatted value
+        if (!rowGroupColumn || !column) {
             return valueFormatted;
+        }
+
+        if (!column?.isRowGroupDisplayed(rowGroupColumn.getId())) {
+            return null;
         }
 
         return valueSvc.formatValue(rowGroupColumn, this.node, value);
@@ -224,7 +232,7 @@ export class GroupCellRendererCtrl extends BeanStub implements IGroupCellRendere
             footerValue = footerSvc?.getTotalValue(valueFormatted ?? value);
         }
 
-        const innerCompDetails = this.getInnerCompDetails();
+        const innerCompDetails = this.getInnerCompDetails(valueFormatted);
         this.comp.setInnerRenderer(innerCompDetails, footerValue ?? '');
     }
 
@@ -331,9 +339,12 @@ export class GroupCellRendererCtrl extends BeanStub implements IGroupCellRendere
      * 5. Inner renderer of the grouped column
      * 6. agFindCellRenderer for find results
      */
-    private getInnerCompDetails(): UserCompDetails | undefined {
+    private getInnerCompDetails(formattedValue: any): UserCompDetails | undefined {
         const { userCompFactory, findSvc } = this.beans;
-        const params = this.params;
+        const params: GroupCellRendererParams = {
+            ...this.params,
+            valueFormatted: formattedValue,
+        };
 
         // full width rows do not inherit the child group column renderer
         if (params.fullWidth) {
@@ -449,19 +460,28 @@ export class GroupCellRendererCtrl extends BeanStub implements IGroupCellRendere
             return false;
         }
 
+        // Manually pinned group rows cannot be expanded
+        if (node.rowPinned) {
+            return false;
+        }
+
         const isFullWidth = !column;
         if (isFullWidth) {
             return true;
         }
 
-        // in non showRowGroup cols hide chevrons on group rows - only useful for master-detail on leaf nodes
-        if (node.group && !colDef?.showRowGroup) {
-            return false;
-        }
+        const hasChildren = (node as RowNode).hasChildren();
+        if (hasChildren && colDef) {
+            const { showRowGroup } = colDef;
+            // if col has grouping/tree data children then only showRowGroup cols are expandable
+            if (!showRowGroup) {
+                return false;
+            }
 
-        // single group column, so we show expand / contract on every group cell
-        if (column?.getColDef().showRowGroup === true && node.group) {
-            return true;
+            // if single auto col, this is the correct col for displaying chevron
+            if (showRowGroup === true) {
+                return true;
+            }
         }
 
         // if not showing adjusted node for [groupHideOpenParents]
@@ -526,6 +546,13 @@ export class GroupCellRendererCtrl extends BeanStub implements IGroupCellRendere
      * Selection checkboxes
      */
     private setupCheckbox(): void {
+        const { node } = this.params;
+
+        const isRowSelectable = !node.footer && !node.rowPinned && !node.detail;
+        if (!isRowSelectable) {
+            return;
+        }
+
         this.addManagedPropertyListener('rowSelection', ({ currentValue, previousValue }) => {
             const curr = typeof currentValue === 'object' ? currentValue : undefined;
             const prev = typeof previousValue === 'object' ? previousValue : undefined;
@@ -540,50 +567,61 @@ export class GroupCellRendererCtrl extends BeanStub implements IGroupCellRendere
 
     private addCheckbox(): void {
         const { selectionSvc } = this.beans;
-        if (!selectionSvc) {
+        if (!selectionSvc || !_isRowSelection(this.gos)) {
             return;
         }
 
-        const node = this.params.node as RowNode;
+        const { node, column } = this.params;
         const rowSelection = this.gos.get('rowSelection');
+
         const checkboxLocation = _getCheckboxLocation(rowSelection);
-        const checkboxes =
-            typeof rowSelection === 'object'
-                ? checkboxLocation === 'autoGroupColumn' && _getCheckboxes(rowSelection)
-                : this.params.checkbox;
-        const userWantsSelected = typeof checkboxes === 'function' || checkboxes === true;
-
-        const checkboxNeeded =
-            userWantsSelected &&
-            // footers cannot be selected
-            !node.footer &&
-            // pinned rows cannot be selected
-            !node.rowPinned &&
-            // details cannot be selected
-            !node.detail &&
-            _isRowSelection(this.gos);
-
-        if (checkboxNeeded) {
-            const cbSelectionComponent = selectionSvc.createCheckboxSelectionComponent();
-            this.cbComp = cbSelectionComponent;
-            this.createBean(cbSelectionComponent);
-
-            cbSelectionComponent.init({
-                rowNode: node, // when groupHideOpenParents = true and group expanded, we want the checkbox to refer to leaf node state (not group node state)
-                column: this.params.column as AgColumn,
-                overrides: {
-                    isVisible: checkboxes,
-                    callbackParams: this.params,
-                    removeHidden: true,
-                },
-            });
-            this.eCheckbox.appendChild(cbSelectionComponent.getGui());
+        if (checkboxLocation === 'selectionColumn') {
+            return;
         }
 
-        this.comp.setCheckboxVisible(checkboxNeeded);
+        if (checkboxLocation === 'autoGroupColumn') {
+            const isGroupColumn = column?.getColDef().showRowGroup != null;
+            const isFullWidthGroupRow = !column && node.group;
+            const isApplicableCell = isGroupColumn || isFullWidthGroupRow;
+            if (!isApplicableCell) {
+                return;
+            }
+        }
+
+        const checkboxes = typeof rowSelection === 'object' ? _getCheckboxes(rowSelection) : this.params.checkbox;
+
+        const userWantsCheckboxes = typeof checkboxes === 'function' || checkboxes === true;
+        if (!userWantsCheckboxes) {
+            return;
+        }
+
+        // if user wants checkboxes, but this cell is wrong, add extra alignment padding
+        const isMultiAutoCol = typeof column?.getColDef().showRowGroup === 'string';
+        if (isMultiAutoCol && !this.isExpandable()) {
+            this.comp.setCheckboxSpacing(true);
+            return;
+        }
+
+        const cbSelectionComponent = selectionSvc.createCheckboxSelectionComponent();
+        this.cbComp = cbSelectionComponent;
+        this.createBean(cbSelectionComponent);
+
+        cbSelectionComponent.init({
+            rowNode: node as RowNode, // when groupHideOpenParents = true and group expanded, we want the checkbox to refer to leaf node state (not group node state)
+            column: column as AgColumn,
+            overrides: {
+                isVisible: checkboxes,
+                callbackParams: this.params,
+                removeHidden: true,
+            },
+        });
+        this.eCheckbox.appendChild(cbSelectionComponent.getGui());
+        this.comp.setCheckboxVisible(true);
     }
 
     private destroyCheckbox(): void {
+        this.comp.setCheckboxSpacing(false);
+        this.comp.setCheckboxVisible(false);
         this.cbComp && this.eCheckbox.removeChild(this.cbComp.getGui());
         this.cbComp = this.destroyBean(this.cbComp);
     }

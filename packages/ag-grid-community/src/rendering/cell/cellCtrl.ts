@@ -12,6 +12,7 @@ import type { GridOptionsService } from '../../gridOptionsService';
 import {
     _addGridCommonParams,
     _getActiveDomElement,
+    _getCheckboxLocation,
     _getCheckboxes,
     _isCellSelectionEnabled,
     _setDomData,
@@ -24,6 +25,7 @@ import type { ICellRangeFeature } from '../../interfaces/iCellRangeFeature';
 import type { CellChangedEvent } from '../../interfaces/iRowNode';
 import type { RowPosition } from '../../interfaces/iRowPosition';
 import type { UserCompDetails } from '../../interfaces/iUserCompDetails';
+import { _isManualPinnedRow } from '../../pinnedRowModel/pinnedRowUtils';
 import type { CheckboxSelectionComponent } from '../../selection/checkboxSelectionComponent';
 import type { CellCustomStyleFeature } from '../../styling/cellCustomStyleFeature';
 import type { TooltipFeature } from '../../tooltip/tooltipFeature';
@@ -122,6 +124,8 @@ export class CellCtrl extends BeanStub {
     public onEditorAttachedFuncs: (() => void)[] = [];
 
     private focusEventWhileNotReady: CellFocusedEvent | null = null;
+    // if cell has been focused, check if it's focused when destroyed
+    private hasBeenFocused = false;
 
     constructor(
         public readonly column: AgColumn,
@@ -293,7 +297,7 @@ export class CellCtrl extends BeanStub {
 
     private setupControlComps(): void {
         const colDef = this.column.getColDef();
-        this.includeSelection = this.isIncludeControl(this.isCheckboxSelection(colDef));
+        this.includeSelection = this.isIncludeControl(this.isCheckboxSelection(colDef), true);
         this.includeRowDrag = this.isIncludeControl(colDef.rowDrag);
         this.includeDndSource = this.isIncludeControl(colDef.dndSource);
 
@@ -304,33 +308,42 @@ export class CellCtrl extends BeanStub {
 
     public isForceWrapper(): boolean {
         // text selection requires the value to be wrapped in another element
-        const forceWrapper = this.beans.gos.get('enableCellTextSelection') || this.column.isAutoHeight();
-        return forceWrapper;
+        return this.beans.gos.get('enableCellTextSelection') || this.column.isAutoHeight();
     }
 
+    /**
+     * Wrapper providing general conditions under which control elements (e.g. checkboxes and drag handles)
+     * are rendered for a particular cell.
+     * @param value Whether to render the control in the specific context of the caller
+     * @param allowManuallyPinned Whether manually pinned rows are permitted this form of control element
+     */
     // eslint-disable-next-line @typescript-eslint/ban-types
-    private isIncludeControl(value: boolean | Function | undefined): boolean {
-        const rowNodePinned = this.rowNode.rowPinned != null;
-        const isFunc = typeof value === 'function';
-        const res = rowNodePinned ? false : isFunc || value === true;
-
-        return res;
+    private isIncludeControl(value: boolean | Function | undefined, allowManuallyPinned = false): boolean {
+        const rowUnpinned = this.rowNode.rowPinned == null;
+        return (rowUnpinned || (allowManuallyPinned && _isManualPinnedRow(this.rowNode))) && !!value;
     }
 
     private isCheckboxSelection(colDef: ColDef): boolean | CheckboxSelectionCallback | undefined {
-        const { rowSelection } = this.beans.gridOptions;
+        const { rowSelection, groupDisplayType } = this.beans.gridOptions;
+        const checkboxLocation = _getCheckboxLocation(rowSelection);
+        const isSelectionColumn = isColumnSelectionCol(this.column);
+
+        // Specific check for custom group display type here because we assume one of the non-selection
+        // columns will have `showRowGroup != null` and so in this case we will be rendering the checkbox
+        // in the group cell rather than here (the selection column)
+        if (groupDisplayType === 'custom' && checkboxLocation !== 'selectionColumn' && isSelectionColumn) {
+            return false;
+        }
+
         return (
             colDef.checkboxSelection ||
-            (isColumnSelectionCol(this.column) &&
-                rowSelection &&
-                typeof rowSelection !== 'string' &&
-                _getCheckboxes(rowSelection))
+            (isSelectionColumn && typeof rowSelection === 'object' && _getCheckboxes(rowSelection))
         );
     }
 
     private refreshShouldDestroy(): boolean {
         const colDef = this.column.getColDef();
-        const selectionChanged = this.includeSelection != this.isIncludeControl(this.isCheckboxSelection(colDef));
+        const selectionChanged = this.includeSelection != this.isIncludeControl(this.isCheckboxSelection(colDef), true);
         const rowDragChanged = this.includeRowDrag != this.isIncludeControl(colDef.rowDrag);
         const dndSourceChanged = this.includeDndSource != this.isIncludeControl(colDef.dndSource);
         // auto height uses wrappers, so need to destroy
@@ -682,8 +695,17 @@ export class CellCtrl extends BeanStub {
         this.comp.addOrRemoveCssClass(CSS_CELL_LAST_LEFT_PINNED, lastLeftPinned);
     }
 
-    public isCellFocused(): boolean {
+    /**
+     * Returns whether cell is focused by the focusSvc, overridden by spannedCellCtrl
+     */
+    protected checkCellFocused(): boolean {
         return this.beans.focusSvc.isCellFocused(this.cellPosition);
+    }
+
+    public isCellFocused(): boolean {
+        const isFocused = this.checkCellFocused();
+        this.hasBeenFocused ||= isFocused;
+        return isFocused;
     }
 
     public setupFocus() {
@@ -820,9 +842,9 @@ export class CellCtrl extends BeanStub {
         this.onCompAttachedFuncs = [];
         this.onEditorAttachedFuncs = [];
 
-        // if this was focused; focus will need recovered
+        // if this was focused; (e.g cell span status changes) then we need to restore focus
         if (this.isCellFocused() && this.hasBrowserFocus()) {
-            this.beans.focusSvc.needsFocusRestored = true;
+            this.beans.focusSvc.attemptToRecoverFocus();
         }
 
         super.destroy();

@@ -24,7 +24,7 @@ import type { RowBounds, RowModelType } from '../interfaces/iRowModel';
 import type { IRowGroupStage, IRowNodeStage } from '../interfaces/iRowNodeStage';
 import type { RowDataTransaction } from '../interfaces/rowDataTransaction';
 import type { RowNodeTransaction } from '../interfaces/rowNodeTransaction';
-import { _EmptyArray, _last, _removeFromArray } from '../utils/array';
+import { _EmptyArray, _last } from '../utils/array';
 import { ChangedPath } from '../utils/changedPath';
 import { _debounce } from '../utils/function';
 import { _warn } from '../validation/logging';
@@ -333,8 +333,15 @@ export class ClientSideRowModel extends BeanStub implements IClientSideRowModel,
                 // no need to invalidate cache, as the cache is stored on the rowNode,
                 // so new rowNodes means the cache is wiped anyway.
 
+                const { selectionSvc, pinnedRowModel } = this.beans;
+
                 // - clears selection, done before we set row data to ensure it isn't readded via `selectionSvc.syncInOldRowNode`
-                this.beans.selectionSvc?.reset('rowDataChanged');
+                selectionSvc?.reset('rowDataChanged');
+
+                // only clear pinned rows if using manual pinning
+                if (pinnedRowModel?.isManual()) {
+                    pinnedRowModel.reset();
+                }
 
                 this.rowNodesCountReady = true;
                 nodeManager.setNewRowData(newRowData);
@@ -358,7 +365,7 @@ export class ClientSideRowModel extends BeanStub implements IClientSideRowModel,
     }
 
     private setRowTopAndRowIndex(): Set<string> {
-        const { beans } = this;
+        const { beans, rowsToDisplay } = this;
         const defaultRowHeight = beans.environment.getDefaultRowHeight();
         let nextRowTop = 0;
 
@@ -372,7 +379,6 @@ export class ClientSideRowModel extends BeanStub implements IClientSideRowModel,
         // with these two layouts.
         const allowEstimate = _isDomLayout(this.gos, 'normal');
 
-        const rowsToDisplay = this.rowsToDisplay;
         for (let i = 0, len = rowsToDisplay.length; i < len; ++i) {
             const rowNode = rowsToDisplay[i];
 
@@ -463,34 +469,57 @@ export class ClientSideRowModel extends BeanStub implements IClientSideRowModel,
     }
 
     /** Called by `moveRows` for drag and drop on a flat list of rows. */
-    private moveRowsFlat(rootNode: RowNode, rowNodes: RowNode[], target: RowNode, below: boolean): boolean {
-        // TODO: this implementation is currently quite inefficient and it could be optimized to run in O(n) in a single pass
+    private moveRowsFlat(
+        rootNode: RowNode,
+        rowNodes: ClientSideRowModelRowNode[],
+        target: RowNode,
+        below: boolean
+    ): boolean {
+        const nodeManager = this.nodeManager;
+        const rowsSet = new Set<ClientSideRowModelRowNode>();
+        for (let i = 0, len = rowNodes.length; i < len; ++i) {
+            const node = rowNodes[i];
+            if (node === target) {
+                return false; // can't move to self
+            }
+            if (node !== nodeManager.getRowNode(node.id!)) {
+                continue; // deleted while dragging
+            }
+            rowsSet.add(node);
+        }
 
-        const rowNodesLen = rowNodes.length;
-        const targetRowTop = target.rowTop!;
-        let increment = below ? 1 : 0;
-        for (let i = 0, len = rowNodesLen; i < len; ++i) {
-            const rowNode = rowNodes[i];
-            if (rowNode === target) {
-                return false;
-            }
-            if (rowNode.rowTop! <= targetRowTop) {
-                --increment;
-            }
+        if (rowsSet.size === 0) {
+            return false; // Nothing to move
         }
 
         const allLeafChildren: ClientSideRowModelRowNode[] = rootNode.allLeafChildren!;
-        for (let i = 0; i < rowNodesLen; ++i) {
-            _removeFromArray(allLeafChildren, rowNodes[i]);
+        const allLeafChildrenLen = allLeafChildren.length;
+        const splitIndex = Math.max(0, Math.min(allLeafChildrenLen, target.sourceRowIndex + (below ? 1 : 0)));
+
+        // First partition. Filter from left to right, so the middle can be overwritten
+        let left = 0;
+        for (let i = 0; i < splitIndex; ++i) {
+            const row = allLeafChildren[i];
+            if (!rowsSet.has(row)) {
+                row.sourceRowIndex = left;
+                allLeafChildren[left++] = row;
+            }
         }
 
-        const delta = Math.max(target.sourceRowIndex + increment, 0);
-        for (let i = 0; i < rowNodesLen; ++i) {
-            allLeafChildren.splice(delta + i, 0, rowNodes[i]);
+        // Third partition. Filter from right to left, so the middle can be overwritten
+        let right = allLeafChildrenLen - 1;
+        for (let i = right; i >= splitIndex; --i) {
+            const row = allLeafChildren[i];
+            if (!rowsSet.has(row)) {
+                row.sourceRowIndex = right;
+                allLeafChildren[right--] = row;
+            }
         }
 
-        for (let i = 0, len = allLeafChildren.length; i < len; ++i) {
-            allLeafChildren[i].sourceRowIndex = i;
+        // Second partition. Overwrites the middle between the other two filtered partitions
+        for (const row of rowsSet) {
+            row.sourceRowIndex = left;
+            allLeafChildren[left++] = row;
         }
 
         return true;

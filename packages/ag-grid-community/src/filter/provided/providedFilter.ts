@@ -4,7 +4,8 @@ import type { IDoesFilterPassParams, IFilterComp } from '../../interfaces/iFilte
 import type { PopupEventParams } from '../../interfaces/iPopup';
 import type { IRowNode } from '../../interfaces/iRowNode';
 import { PositionableFeature } from '../../rendering/features/positionableFeature';
-import { _clearElement, _loadTemplate, _removeFromParent, _setDisabled } from '../../utils/dom';
+import type { ElementParams } from '../../utils/dom';
+import { _clearElement, _createElement, _removeFromParent, _setDisabled } from '../../utils/dom';
 import { _debounce } from '../../utils/function';
 import { _jsonEquals } from '../../utils/generic';
 import type { AgPromise } from '../../utils/promise';
@@ -57,7 +58,7 @@ export abstract class ProvidedFilter<M, V> extends Component implements IProvide
 
     protected abstract updateUiVisibility(): void;
 
-    protected abstract createBodyTemplate(): string;
+    protected abstract createBodyTemplate(): ElementParams | null;
     protected abstract getAgComponents(): ComponentSelector[];
     protected abstract getCssIdentifier(): string;
     protected abstract resetUiToDefaults(silent?: boolean): AgPromise<void>;
@@ -101,17 +102,22 @@ export abstract class ProvidedFilter<M, V> extends Component implements IProvide
     protected resetTemplate(paramsMap?: any) {
         let eGui = this.getGui();
 
-        if (eGui) {
-            eGui.removeEventListener('submit', this.onFormSubmit);
-        }
-        const templateString = /* html */ `
-            <form class="ag-filter-wrapper">
-                <div class="ag-filter-body-wrapper ag-${this.getCssIdentifier()}-body-wrapper" data-ref="eFilterBody">
-                    ${this.createBodyTemplate()}
-                </div>
-            </form>`;
+        eGui?.removeEventListener('submit', this.onFormSubmit);
 
-        this.setTemplate(templateString, this.getAgComponents(), paramsMap);
+        const element: ElementParams = {
+            tag: 'form',
+            cls: 'ag-filter-wrapper',
+            children: [
+                {
+                    tag: 'div',
+                    ref: 'eFilterBody',
+                    cls: `ag-filter-body-wrapper ag-${this.getCssIdentifier()}-body-wrapper`,
+                    children: [this.createBodyTemplate()],
+                },
+            ],
+        };
+
+        this.setTemplate(element, this.getAgComponents(), paramsMap);
 
         eGui = this.getGui();
         eGui?.addEventListener('submit', this.onFormSubmit);
@@ -159,8 +165,7 @@ export abstract class ProvidedFilter<M, V> extends Component implements IProvide
         if (!this.eButtonsPanel) {
             // Only create the buttons panel if we need to
             if (hasButtons) {
-                this.eButtonsPanel = document.createElement('div');
-                this.eButtonsPanel.classList.add('ag-filter-apply-panel');
+                this.eButtonsPanel = _createElement({ tag: 'div', cls: 'ag-filter-apply-panel' });
             }
         } else {
             // Always empty the buttons panel before adding new buttons
@@ -208,15 +213,13 @@ export abstract class ProvidedFilter<M, V> extends Component implements IProvide
             }
 
             const buttonType = type === 'apply' ? 'submit' : 'button';
-            const button = _loadTemplate(
-                /* html */
-                `<button
-                    type="${buttonType}"
-                    data-ref="${type}FilterButton"
-                    class="ag-button ag-standard-button ag-filter-apply-panel-button"
-                >${text}
-                </button>`
-            );
+            const button = _createElement({
+                tag: 'button',
+                attrs: { type: buttonType },
+                ref: `${type}FilterButton`,
+                cls: 'ag-button ag-standard-button ag-filter-apply-panel-button',
+                children: text,
+            });
 
             this.buttonListeners.push(...this.addManagedElementListeners(button, { click: clickListener }));
             fragment.append(button);
