@@ -26,6 +26,8 @@ import type { HorizontalResizeService } from '../dragAndDrop/horizontalResizeSer
 import type { RowDragService } from '../dragAndDrop/rowDragService';
 import type { EditService } from '../edit/editService';
 import type { RowEditService } from '../edit/rowEditService';
+import type { EditingService } from '../editing/editingService';
+import type { RowEditingService } from '../editing/rowEditingService';
 import type { GridOptions } from '../entities/gridOptions';
 import type { Environment } from '../environment';
 import type { EventService } from '../eventService';
@@ -269,7 +271,9 @@ export interface CoreBeanCollection {
     enterpriseMenuFactory?: IMenuFactory;
     contextMenuSvc?: IContextMenuService;
     editSvc?: EditService;
+    editingSvc?: EditingService;
     rowEditSvc?: RowEditService;
+    rowEditingSvc?: RowEditingService;
     alignedGridsSvc?: AlignedGridsService;
     paginationAutoPageSizeSvc?: PaginationAutoPageSizeService;
     pagination?: PaginationService;
@@ -395,6 +399,7 @@ export type BeanName =
     | 'dragAndDrop'
     | 'dragSvc'
     | 'editSvc'
+    | 'editingSvc'
     | 'excelCreator'
     | 'enterpriseMenuFactory'
     | 'environment'
@@ -458,6 +463,7 @@ export type BeanName =
     | 'rowContainerHeight'
     | 'rowDragSvc'
     | 'rowEditSvc'
+    | 'rowEditingSvc'
     | 'rowModel'
     | 'rowNodeBlockLoader'
     | 'rowNodeSorter'

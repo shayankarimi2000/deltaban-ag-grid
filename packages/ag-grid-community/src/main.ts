@@ -1088,6 +1088,7 @@ export {
     DateFilterModule,
     ExternalFilterModule,
 } from './filter/filterModule';
+export { EditingCoreModule as _EditingCoreModule } from './editing/editingModule';
 export {
     EditCoreModule as _EditCoreModule,
     NumberEditorModule,
